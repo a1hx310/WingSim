@@ -1,0 +1,4 @@
+numpy>=1.26
+numba>=0.60
+PySide6>=6.6
+pyqtgraph>=0.13.7
