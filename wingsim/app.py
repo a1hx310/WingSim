@@ -12,6 +12,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import airfoil
 from .lbm import Tunnel
 
+
 AIR_DENSITY = 1.225  # kg/m^3, sea level
 AIR_NU = 1.5e-5  # m^2/s, kinematic viscosity at about 20 C
 # Above this the grid cannot resolve the flow even with the subgrid model, so the
@@ -21,6 +22,20 @@ MAX_SIM_RE = 20000.0
 NX, NY = 560, 280
 CHORD_CELLS = 80
 PIVOT = (180.0, (NY - 1) / 2)  # centred so a symmetric wing sees a symmetric tunnel
+
+
+def make_tunnel(prefer_gpu=True):
+    """Build the tunnel on the NVIDIA GPU when one is available, otherwise on the CPU."""
+    if prefer_gpu:
+        try:
+            from .lbm_gpu import GpuTunnel, gpu_name
+            if gpu_name() is not None:
+                GpuTunnel(16, 8).step(1)  # compiles the kernels, so failures surface here
+                return GpuTunnel(NX, NY)
+        except Exception as exc:  # missing numba-cuda, driver problems, and so on
+            print(f"GPU unavailable, using CPU: {exc}", file=sys.stderr)
+    return Tunnel(NX, NY)
+
 
 VIEWS = {
     "Speed": ("speed", "inferno"),
@@ -127,10 +142,10 @@ class Controls(QtWidgets.QWidget):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self):
+    def __init__(self, prefer_gpu=True):
         super().__init__()
         self.setWindowTitle("WingSim wind tunnel")
-        self.tunnel = Tunnel(NX, NY)
+        self.tunnel = make_tunnel(prefer_gpu)
         self.history = deque(maxlen=600)
         self.code = None
         self.aoa = None
@@ -221,7 +236,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def reset_flow(self):
         solid = self.tunnel.solid
-        self.tunnel = Tunnel(NX, NY)
+        self.tunnel = make_tunnel(self.tunnel.device == "gpu")
         self.tunnel.set_solid(solid)
         self.tunnel.set_reynolds(min(self.physical_re(), MAX_SIM_RE), CHORD_CELLS)
         self.history.clear()
@@ -297,13 +312,14 @@ class MainWindow(QtWidgets.QMainWindow):
             f"<b>Lift</b> {cl * q:.3f} N per metre of span<br>"
             f"<b>Drag</b> {cd * q:.3f} N per metre of span<br><br>"
             f"<b>Reynolds number</b> {re_sim:,.0f}{warn}<br>"
-            f"<b>Solver</b> {self._rate:,.0f} steps/s, step {self.tunnel.steps:,}"
+            f"<b>Solver</b> {self.tunnel.device_label}, {self._rate:,.0f} steps/s, step {self.tunnel.steps:,}"
         )
 
 
 def main():
+    prefer_gpu = "--cpu" not in sys.argv
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
-    win = MainWindow()
+    win = MainWindow(prefer_gpu)
     win.show()
     return app.exec()

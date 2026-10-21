@@ -97,6 +97,9 @@ class Tunnel:
     """A 2D wind tunnel: uniform inflow on the left, open outlet on the right,
     free-stream far field on the top and bottom, and a solid body in between."""
 
+    device = "cpu"
+    device_label = "CPU"
+
     def __init__(self, nx=520, ny=220, u_lattice=0.08, smagorinsky=0.14):
         self.nx, self.ny = nx, ny
         self.u = u_lattice  # inflow speed in lattice units; keep well below 0.3 (Mach limit)

@@ -20,6 +20,26 @@ python -m wingsim
 The first launch takes a few seconds while Numba compiles the solver. Later
 launches use the cached build.
 
+### Running on an NVIDIA GPU
+
+WingSim uses an NVIDIA GPU automatically when it finds one. You need a recent
+NVIDIA driver (version 525 or newer, which supports CUDA 12). Install the GPU
+packages once:
+
+```bash
+pip install -r requirements-gpu.txt
+python -m wingsim
+```
+
+The Solver line in the side panel shows which device is running, for example
+`GPU (NVIDIA GeForce RTX 4070)`. If the GPU can't be used, the app prints the
+reason in the terminal and runs on the CPU instead. To force the CPU, run
+`python -m wingsim --cpu`.
+
+The CUDA toolkit comes from pip, so you don't need to install it separately.
+On Windows, use a normal Python install, not WSL, unless WSL already has GPU
+access set up.
+
 ## What you can change
 
 | Control | What it does |
@@ -47,7 +67,8 @@ directly onto a GPU later.
 * Walls: half-way bounce-back on the cells inside the airfoil.
 * Forces: momentum exchange across every fluid-to-wall link, giving lift and drag directly.
 * Boundaries: uniform inflow on the left, free-stream far field top and bottom, open outlet on the right.
-* Speed: Numba compiles the kernel and runs it on all CPU cores.
+* Speed: Numba compiles the kernel and runs it on all CPU cores, or on an NVIDIA
+  GPU with Numba CUDA (`wingsim/lbm_gpu.py`), one GPU thread per cell in single precision.
 
 ### Accuracy and limits
 
@@ -67,10 +88,14 @@ pip install pytest
 python -m pytest
 ```
 
+The GPU test runs on a real GPU when one is present. Without one, check the GPU
+kernels against the CPU solver with Numba's simulator:
+`NUMBA_ENABLE_CUDASIM=1 python -m pytest tests/test_lbm_gpu.py`.
+
 ## Roadmap
 
 1. Airfoil wind tunnel (this milestone)
-2. GPU solver and finer grids for higher Reynolds numbers
+2. Finer grids on the GPU for higher Reynolds numbers
 3. 3D wings with span, taper and tip vortices
 4. Bird wing shapes and flapping
 5. Human-scale wings, with every parameter adjustable live
