@@ -1,0 +1,16 @@
+[project]
+name = "wingsim"
+version = "0.1.0"
+description = "A 2D virtual wind tunnel for wings, built on the Lattice Boltzmann method"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26", "numba>=0.60", "PySide6>=6.6", "pyqtgraph>=0.13.7"]
+
+[project.optional-dependencies]
+gpu = ["numba-cuda[cu12]>=0.30", "numpy<2.5"]
+test = ["pytest"]
+
+[project.gui-scripts]
+wingsim = "wingsim.app:main"
+
+[tool.setuptools]
+packages = ["wingsim"]
