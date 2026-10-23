@@ -39,3 +39,11 @@ def test_lift_grows_with_angle_of_attack():
     _, cl_low = _run("0012", 2.0)
     _, cl_high = _run("0012", 8.0)
     assert 0 < cl_low < cl_high
+
+
+def test_start_then_finish_advances_the_flow():
+    t = Tunnel(40, 20)
+    t.start(7)
+    assert t.finish() == 7
+    assert t.steps == 7
+    assert t.finish() == 0

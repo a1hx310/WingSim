@@ -10,6 +10,8 @@ Everything here is in lattice units: one cell is one unit of length, one step is
 one unit of time, and the free-stream density is 1.
 """
 
+import time
+
 import numpy as np
 from numba import njit, prange
 
@@ -93,6 +95,39 @@ def _stream_collide(f, fn, solid, tau0, cs2, rho_out, ux_out, uy_out, fx_rows, f
         fy_rows[y] = fy_acc
 
 
+@njit(cache=True)
+def _jitter(k, seed):
+    """Repeatable pseudo-random number in [0, 1) for particle k, shared with the GPU."""
+    return ((k * 7919 + seed * 104729) % 10007) / 10007.0
+
+
+@njit(cache=True)
+def _advect(pos, release, ux, uy, solid, dt, spread, seed):
+    ny, nx = ux.shape
+    # Keep each particle move under about half a cell so streaks stay smooth.
+    substeps = max(1, int(dt * 0.2) + 1)
+    h = dt / substeps
+    for k in range(pos.shape[0]):
+        x, y = pos[k, 0], pos[k, 1]
+        for _ in range(substeps):
+            if not (0 <= x < nx - 1 and 0 <= y < ny - 1):
+                break
+            i, j = int(x), int(y)
+            fx, fy = x - i, y - j
+            u = ((1 - fx) * (1 - fy) * ux[j, i] + fx * (1 - fy) * ux[j, i + 1]
+                 + (1 - fx) * fy * ux[j + 1, i] + fx * fy * ux[j + 1, i + 1])
+            v = ((1 - fx) * (1 - fy) * uy[j, i] + fx * (1 - fy) * uy[j, i + 1]
+                 + (1 - fx) * fy * uy[j + 1, i] + fx * fy * uy[j + 1, i + 1])
+            x += u * h
+            y += v * h
+        if x < 1 or x >= nx - 2 or y < 1 or y >= ny - 2 or solid[int(y), int(x)]:
+            # Re-release from the smoke rake at the inlet, spread over the distance the
+            # free stream covers in dt so the streaks stay continuous.
+            x = 1.0 + spread * _jitter(k, seed)
+            y = release[k, 1]
+        pos[k, 0], pos[k, 1] = x, y
+
+
 class Tunnel:
     """A 2D wind tunnel: uniform inflow on the left, open outlet on the right,
     free-stream far field on the top and bottom, and a solid body in between."""
@@ -115,6 +150,9 @@ class Tunnel:
         self._inflow = equilibrium(1.0, self.u, 0.0)[:, None]
         self.force = (0.0, 0.0)
         self.steps = 0
+        self.batch_ms = 0.0  # how long the last start() batch took to compute
+        self._pending = 0
+        self.set_particles(np.zeros((0, 2)), np.zeros((0, 2)))
         self.length = 1.0
         self.set_reynolds(100.0)
 
@@ -154,6 +192,36 @@ class Tunnel:
         self.steps += n
         self.force = (fx / n, fy / n)
         return self.force
+
+    def start(self, n=1):
+        """Begin advancing n time steps, for finish() to complete. GPU tunnels return at
+        once and compute while the caller does other work; here the work happens now."""
+        t0 = time.perf_counter()
+        self.step(n)
+        self.batch_ms = 1000 * (time.perf_counter() - t0)
+        self._pending = n
+
+    def finish(self):
+        """Wait for the steps begun by start() and return how many there were."""
+        n, self._pending = self._pending, 0
+        return n
+
+    def set_particles(self, pos, release):
+        """Smoke particles at pos (n, 2), or (n, 3) in 3D, each re-released at the inlet
+        from its rake point in release (x is ignored) when it leaves the tunnel or hits
+        the body."""
+        self._pos = np.array(pos, dtype=np.float64)
+        self._release = np.array(release, dtype=np.float64)
+
+    def _spread(self, dt):
+        """Length of inlet over which smoke re-enters in a move of dt steps."""
+        return max(2.0, self.u * dt)
+
+    def advect(self, dt):
+        """Move the smoke particles with the flow for dt steps; returns their positions."""
+        _advect(self._pos, self._release, self.ux, self.uy, self.solid, float(dt),
+                self._spread(dt), self.steps)
+        return self._pos
 
     def coefficients(self):
         """Drag and lift coefficients for the current force, per unit span."""

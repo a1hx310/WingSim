@@ -2,3 +2,4 @@
 numba-cuda[cu12]>=0.30
 # numba-cuda 0.30 still uses np.row_stack, which numpy 2.5 removed.
 numpy<2.5
+nvidia-ml-py>=12.535  # GPU memory and load readout

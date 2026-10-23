@@ -118,3 +118,68 @@ def rasterize_polygon(poly, shape):
         for left, right in zip(xc[::2], xc[1::2]):
             mask[j, max(int(np.ceil(left)), 0):max(min(int(np.ceil(right)), nx), 0)] = True
     return mask
+
+
+def extrude(mask, nz, z0, z1):
+    """Boolean mask (nz, ny, nx) of a straight wing: the section mask (ny, nx) in every
+    span layer whose cell centre lies between z0 and z1."""
+    out = np.zeros((nz,) + mask.shape, dtype=np.bool_)
+    out[max(int(np.ceil(z0)), 0):max(min(int(np.ceil(z1)), nz), 0)] = mask
+    return out
+
+
+def signed_area(poly):
+    """Area of a closed polygon (n, 2), positive when it runs counter-clockwise."""
+    x, y = np.asarray(poly, dtype=np.float64).T
+    return 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
+
+
+def _cross(o, a, b):
+    """z of (a - o) x (b - o); positive when b is left of the line from o to a.
+    b may be an array of points."""
+    return (a[0] - o[0]) * (b[..., 1] - o[1]) - (a[1] - o[1]) * (b[..., 0] - o[0])
+
+
+def _triangulate(poly):
+    """Triangles (index triples) covering a simple polygon given counter-clockwise,
+    by ear clipping. A self-crossing outline falls back to a fan for what is left."""
+    idx = list(range(len(poly)))
+    tris = []
+    k = 0
+    misses = 0
+    while len(idx) > 3 and misses < len(idx):
+        a, b, c = idx[k - 1], idx[k], idx[(k + 1) % len(idx)]
+        pa, pb, pc = poly[a], poly[b], poly[c]
+        ear = _cross(pa, pb, pc) > 0
+        if ear:
+            # No other vertex may lie inside the candidate triangle.
+            rest = poly[[i for i in idx if i not in (a, b, c)]]
+            ear = not ((_cross(pa, pb, rest) >= 0) & (_cross(pb, pc, rest) >= 0)
+                       & (_cross(pc, pa, rest) >= 0)).any()
+        if ear:
+            tris.append((a, b, c))
+            idx.pop(k)
+            k %= len(idx)
+            misses = 0
+        else:
+            k = (k + 1) % len(idx)
+            misses += 1
+    tris += [(idx[0], idx[i], idx[i + 1]) for i in range(1, len(idx) - 1)]
+    return np.array(tris, dtype=np.int64)
+
+
+def wing_mesh(outline, z0, z1):
+    """Closed triangle mesh (vertices (2n, 3), faces) of a straight wing with the given
+    section outline (n, 2) in grid coordinates, spanning z0 to z1. Faces wind
+    counter-clockwise seen from outside, so their normals point out of the wing."""
+    pts = np.asarray(outline, dtype=np.float64)
+    if signed_area(pts) < 0:
+        pts = pts[::-1]
+    n = len(pts)
+    verts = np.concatenate([np.c_[pts, np.full(n, z0)], np.c_[pts, np.full(n, z1)]])
+    k = np.arange(n)
+    k1 = (k + 1) % n
+    side = np.concatenate([np.c_[k, k1, n + k1], np.c_[k, n + k1, n + k]])
+    cap = _triangulate(pts)
+    faces = np.concatenate([side, cap[:, ::-1], cap + n])
+    return verts, faces
