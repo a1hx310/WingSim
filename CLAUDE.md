@@ -13,11 +13,15 @@ python -m pytest tests/test_lbm.py::test_name   # single test
 NUMBA_ENABLE_CUDASIM=1 python -m pytest tests/test_lbm_gpu.py tests/test_lbm3d_gpu.py   # GPU kernels vs CPU, no GPU needed
 ```
 
-No linter or build step is configured. The first launch is slow while Numba compiles (`cache=True` on the CPU kernel).
+No linter or build step is configured. The first launch is slow while Numba compiles (`cache=True` on the CPU kernels and the 3D GPU kernels).
+
+The venv hard-codes its own path, so if the project folder moves, `source .venv/bin/activate` silently falls back to the system Python ("No module named 'numpy'"). Rebuild it with `python3 -m venv --clear .venv` and reinstall the requirements.
+
+GUI changes need checking through the real launch (`python -m wingsim`, or a `QTimer`-driven script that calls `wingsim.app.main()`), with Python warnings left on. Tests don't cover the GUI, and scripts that call `tick()` by hand miss bugs that only show when Qt paints before the first frame.
 
 ## Architecture
 
-A 2D wind tunnel: a PySide6/pyqtgraph GUI (`wingsim/app.py`) drives a D2Q9 Lattice Boltzmann solver and shows flow, smoke particles and live CL/CD.
+A wind tunnel for wings: a PySide6/pyqtgraph GUI (`wingsim/app.py`) drives a Lattice Boltzmann solver, D2Q9 for a wing section or D3Q19 for a finite wing, and shows the flow, smoke particles and live CL/CD.
 
 - `wingsim/lbm.py` is the CPU solver and defines the `Tunnel` class and the lattice constants (`CX`, `CY`, `W`, `OPP`). Everything is in **lattice units** (cell = length, step = time, free-stream density 1). `Tunnel.step` runs a fused pull-stream + BGK/Smagorinsky collide kernel, with half-way bounce-back off solid cells. Force comes from momentum exchange across fluid-solid links, accumulated per row inside the kernel. Boundaries (inflow left/top/bottom, copy outlet right) are applied in Python after each kernel call.
 - `wingsim/lbm_gpu.py` has `GpuTunnel`, a Numba CUDA mirror of the CPU kernel (one thread per cell, float32). It subclasses/reuses `Tunnel` and keeps populations on the card, copying only rho/u back for drawing. **Any change to the CPU kernel's physics must be mirrored in the GPU kernel**; `tests/test_lbm_gpu.py` checks they agree.
@@ -26,6 +30,7 @@ A 2D wind tunnel: a PySide6/pyqtgraph GUI (`wingsim/app.py`) drives a D2Q9 Latti
 - `wingsim/app.py` `make_tunnel(prefer_gpu)` picks `GpuTunnel` when `gpu_name()` finds a device, otherwise falls back to the CPU `Tunnel` (printing the reason). Solvers expose `device`/`device_label`, which the UI shows. The GUI also clamps Reynolds number to what the grid can resolve (about Re 20,000) and says so.
 - `wingsim/lbm3d.py` (`Tunnel3D`, D3Q19) and `wingsim/lbm3d_gpu.py` (`GpuTunnel3D`) are the 3D counterparts, for a finite wing: x downstream, y up, z along the span. The same mirroring rule applies between them, checked by `tests/test_lbm3d_gpu.py`. The GPU class keeps everything on the card (populations, fields, smoke particles), so the view asks the solver for what it draws via `slice()`, `advect()` and `q_criterion()` instead of reading whole fields.
 - The app has a 2D/3D mode switch; only one tunnel exists at a time. The 3D grid is the 2D one scaled by `SCALE_3D` (0.4 on GPU, 0.2 on CPU) plus span depth `NZ`, so the "Size in tunnel" control means the same wing in both. `wingsim/view3d.py` (`FlowView3D`, pyqtgraph.opengl) draws the wing mesh, flow slices, smoke and Q-criterion vortex surfaces; its items sit under one root item that maps simulation axes to the view's z-up axes.
+- PySide6 6.12 (the version pip currently installs) crashes when `None` reaches a Qt pen, brush or colour setter inside a `paint()` override, so give custom items a valid pen from construction (see `PointCloud`). Fields drawn through pyqtgraph colormaps must be free of NaN, so replace NaN before `ColorMap.map` and paint body cells afterwards (see `view3d.colorize`). `lbm_gpu.py` turns off Numba's low-occupancy warning, since the small smoke and slice kernels are meant to leave the card mostly idle.
 - `wingsim/airfoil.py` generates NACA 4-digit sections and rasterizes them to the boolean solid mask passed to `Tunnel.set_solid`; `extrude` and `wing_mesh` turn a section into the 3D mask and the drawn wing.
 
 Physical units (newtons, Reynolds number) are derived in the app from lattice quantities via `set_reynolds(re, length)` and `coefficients()`; the solver itself only knows lattice units and keeps inflow speed `u` well below the Mach limit (~0.3).

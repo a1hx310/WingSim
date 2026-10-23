@@ -30,7 +30,9 @@ def colorize(field, cmap, levels, fade=False):
     fade, values near zero turn see-through, so a vorticity plane only hides the
     parts of the scene behind actual vortices."""
     lo, hi = levels
-    rgba = pg.colormap.get(cmap).map(np.clip((field - lo) / (hi - lo), 0.0, 1.0), mode="byte")
+    # Map body cells as zero; they are painted over with the body colour below.
+    scaled = np.nan_to_num((field - lo) / (hi - lo), nan=0.0)
+    rgba = pg.colormap.get(cmap).map(np.clip(scaled, 0.0, 1.0), mode="byte")
     rgba = rgba.reshape(field.shape + (4,))
     if fade:
         rgba[..., 3] = 255 * np.clip(np.abs(np.nan_to_num(field)) / (0.3 * hi), 0.0, 1.0)

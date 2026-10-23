@@ -10,7 +10,7 @@ the host for drawing.
 import math
 
 import numpy as np
-from numba import cuda, float32
+from numba import config, cuda, float32
 
 from .lbm import CX, CY, OPP, W, Tunnel, _jitter
 
@@ -19,6 +19,9 @@ W32 = W.astype(np.float32)
 CXF = CX.astype(np.float32)
 CYF = CY.astype(np.float32)
 BLOCK = (32, 8)
+# Small helper launches (smoke, slices, warm-up) are expected to leave the card mostly
+# idle, so Numba's low-occupancy warning would only be noise.
+config.CUDA_LOW_OCCUPANCY_WARNINGS = False
 BLOCK_1D = 256
 # The CPU smoke jitter compiled for the GPU, so both release particles alike.
 _jitter = cuda.jit(device=True)(_jitter.py_func)

@@ -72,7 +72,7 @@ class PointCloud(pg.GraphicsObject):
         super().__init__()
         self.rect = QtCore.QRectF(0, 0, nx, ny)
         self.points = QtGui.QPolygonF()
-        self.pen = None
+        self.set_shade(255)  # Qt can paint the item before the first frame sets a shade
 
     def set_points(self, x, y):
         self.points = pg.functions.arrayToQPolygonF(x, y)
