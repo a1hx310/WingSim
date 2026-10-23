@@ -41,32 +41,80 @@ def naca4_surfaces(code, n=200):
     return upper, lower
 
 
+def naca4_vertices(code, n=11):
+    """Editable vertices for a section: a closed loop in chord units that starts at the
+    trailing edge, runs forward over the upper surface and back along the lower one."""
+    upper, lower = naca4_surfaces(code, n)
+    return np.concatenate([upper[::-1], lower[1:-1]])
+
+
+def smooth_outline(vertices, samples=12):
+    """Closed curve through the vertices, sharp at vertex 0 (the trailing edge) and
+    smooth elsewhere. It is a centripetal Catmull-Rom spline, which never overshoots
+    into loops however unevenly the vertices are spaced."""
+    p = np.asarray(vertices, dtype=np.float64)
+    q = np.concatenate([p, p[:1]])
+    # Reflected end points leave the two curve ends free, so they meet at a corner.
+    q = np.concatenate([2 * q[:1] - q[1:2], q, 2 * q[-1:] - q[-2:-1]])
+    d = np.linalg.norm(np.diff(q, axis=0), axis=1)
+    t = np.concatenate([[0.0], np.cumsum(np.maximum(d, 1e-9) ** 0.5)])
+    s = np.linspace(0.0, 1.0, samples, endpoint=False)[:, None]
+    out = []
+    for k in range(1, len(q) - 2):
+        t0, t1, t2, t3 = t[k - 1:k + 3]
+        p0, p1, p2, p3 = q[k - 1:k + 3]
+        u = t1 + s * (t2 - t1)
+        # Barry-Goldman pyramid for the segment from p1 to p2.
+        a1 = ((t1 - u) * p0 + (u - t0) * p1) / (t1 - t0)
+        a2 = ((t2 - u) * p1 + (u - t1) * p2) / (t2 - t1)
+        a3 = ((t3 - u) * p2 + (u - t2) * p3) / (t3 - t2)
+        b1 = ((t2 - u) * a1 + (u - t0) * a2) / (t2 - t0)
+        b2 = ((t3 - u) * a2 + (u - t1) * a3) / (t3 - t1)
+        out.append(((t2 - u) * b1 + (u - t1) * b2) / (t2 - t1))
+    return np.concatenate(out)
+
+
+def _rotation(aoa_deg):
+    a = np.radians(aoa_deg)
+    # Nose-up for flow in +x means rotating clockwise in a y-up frame.
+    return np.array([[np.cos(a), np.sin(a)], [-np.sin(a), np.cos(a)]])
+
+
+def place(pts, chord, aoa_deg, pivot):
+    """Chord-unit points (leading edge at the origin) to grid coordinates, scaled by
+    chord and rotated nose-up by aoa_deg about the quarter chord at pivot."""
+    return (np.asarray(pts) - [0.25, 0.0]) @ _rotation(aoa_deg).T * chord + pivot
+
+
+def unplace(pts, chord, aoa_deg, pivot):
+    """Inverse of place: grid coordinates back to chord units."""
+    return (np.asarray(pts) - pivot) / chord @ _rotation(aoa_deg) + [0.25, 0.0]
+
+
 def outline(code, chord, aoa_deg, pivot, n=200):
     """Closed outline in grid coordinates, rotated nose-up by aoa_deg about the quarter chord."""
     upper, lower = naca4_surfaces(code, n)
-    pts = np.concatenate([upper, lower[::-1][1:]]) - [0.25, 0.0]
-    a = np.radians(aoa_deg)
-    # Nose-up for flow in +x means rotating clockwise in a y-up frame.
-    rot = np.array([[np.cos(a), np.sin(a)], [-np.sin(a), np.cos(a)]])
-    return pts @ rot.T * chord + pivot
+    return place(np.concatenate([upper, lower[::-1][1:]]), chord, aoa_deg, pivot)
 
 
 def rasterize(code, chord, aoa_deg, pivot, shape):
     """Boolean mask (ny, nx) of grid cells whose centres lie inside the airfoil."""
+    return rasterize_polygon(outline(code, chord, aoa_deg, pivot, 400), shape)
+
+
+def rasterize_polygon(poly, shape):
+    """Boolean mask (ny, nx) of grid cells whose centres lie inside a closed polygon
+    given in grid coordinates (even-odd rule, so a self-crossing outline still works)."""
     ny, nx = shape
-    upper, lower = naca4_surfaces(code, 400)
-    ys, xs = np.mgrid[0:ny, 0:nx].astype(np.float64)
-    a = np.radians(aoa_deg)
-    dx, dy = xs - pivot[0], ys - pivot[1]
-    # Inverse rotation takes grid points back into the airfoil's own frame.
-    xa = (np.cos(a) * dx - np.sin(a) * dy) / chord + 0.25
-    ya = (np.sin(a) * dx + np.cos(a) * dy) / chord
-    inside = (xa >= upper[:, 0].min()) & (xa <= 1.0)
-    yu = np.interp(xa, *_monotonic(upper))
-    yl = np.interp(xa, *_monotonic(lower))
-    return inside & (ya <= yu) & (ya >= yl)
-
-
-def _monotonic(surface):
-    order = np.argsort(surface[:, 0], kind="stable")
-    return surface[order, 0], surface[order, 1]
+    mask = np.zeros(shape, dtype=np.bool_)
+    ax, ay = poly[:, 0], poly[:, 1]
+    bx, by = np.roll(ax, -1), np.roll(ay, -1)
+    y0 = max(int(np.ceil(ay.min())), 0)
+    y1 = min(int(np.floor(ay.max())) + 1, ny)
+    for j in range(y0, y1):
+        # Scanline fill between successive pairs of edge crossings on this row.
+        c = (ay > j) != (by > j)
+        xc = np.sort(ax[c] + (j - ay[c]) * (bx[c] - ax[c]) / (by[c] - ay[c]))
+        for left, right in zip(xc[::2], xc[1::2]):
+            mask[j, max(int(np.ceil(left)), 0):max(min(int(np.ceil(right)), nx), 0)] = True
+    return mask
